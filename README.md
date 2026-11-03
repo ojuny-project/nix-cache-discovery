@@ -1,52 +1,48 @@
 # nix-cache-discovery
 
-A Nix binary cache for a household LAN. Every host runs the same daemon on the
-same port. Each daemon serves its own Nix store, finds the other daemons on the
-configured prefixes, and proxies anything it does not have locally. A package
-that any household host has built once can then be substituted by every other
-host instead of being rebuilt.
+nix-cache-discovery is a Nix binary cache for a local network. Every host runs
+the same Go daemon on the same port; each daemon serves its own Nix store,
+discovers the other daemons on configured prefixes, and proxies paths it does
+not have locally. It links `libstore` and `libutil` through a C++ shim adapted
+from nix-serve-ng. The package targets Linux and the flake builds
+`x86_64-linux` and `aarch64-linux`.
 
-The daemon is written in Go and links `libstore`/`libutil` through a small C++
-shim adapted from [nix-serve-ng](https://github.com/aristanetworks/nix-serve-ng).
+## Status
 
-## How a request is served
+Untested. The package metadata and flake report version 0.1.0. A two-node
+virtual machine check exists in `tests/two-node.nix`, but no run is recorded for
+this page.
 
-For a narinfo or NAR the daemon tries, in order:
+## Requirements
 
-1. the local Nix store,
-2. every live daemon discovered on the configured prefixes,
-3. the configured `fallbackSubstituters` (for example `https://cache.nixos.org`).
+- NixOS with flakes enabled and a running `nix-daemon`.
+- One TCP port reachable between hosts; the default is 5000 and every peer must
+  use the same value.
+- `discovery.ranges` containing the addresses to scan, or `discovery.auto` for
+  the subnet of the interface that carries the default route.
+- Network access to `fallbackSubstituters` unless the local store and peers
+  already hold every path.
+- Go, a C++ compiler, and the Nix development headers when building from the
+  devshell.
 
-Misses are cached briefly, including negative answers. A narinfo obtained from a
-peer or a fallback is proxied directly; it is re-signed when a signing key is
-configured.
+Memory and disk requirements are not stated.
 
-Discovered peers are marked with an instance header. When a request arrives from
-a peer that is present in the local peer registry, the daemon serves it from the
-local store only. Registered peers therefore never trigger further proxying, and
-a hop limit bounds the case where a peer is not registered yet. This prevents
-proxy loops and discovery storms.
+## Install
 
-Discovery probes previously seen peers first, then the host's own subnets, then
-the rest of each configured range. A peer is dropped only after three
-consecutive scans do not find it, so a long sweep over a large range does not
-expire live peers between visits.
-
-## NixOS usage
+Add the flake input and enable the module on each host:
 
 ```nix
 {
-  inputs.nix-cache-discovery.url = "path:/home/den/repos/nix-cache-discovery";
+  inputs.nix-cache-discovery.url = "github:ojuny-project/nix-cache-discovery";
 
-  outputs = { nixpkgs, nix-cache-discovery, ... }: {
+  outputs = inputs@{ nixpkgs, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        nix-cache-discovery.nixosModules.default
+        inputs.nix-cache-discovery.nixosModules.default
         {
           services.nix-cache-discovery = {
             enable = true;
-            port = 5000;
             discovery.ranges = [ "192.168.1.0/24" ];
           };
         }
@@ -56,187 +52,64 @@ expire live peers between visits.
 }
 ```
 
-That is the whole configuration. By default the module makes the local daemon
-the only substituter of the host, points Nix at `http://127.0.0.1:5000`, and
-trusts that local daemon directly. No key files, secrets or extra options have to
-be added to the system.
+Rebuild with `sudo nixos-rebuild switch --flake .#<host>`, where `<host>` is the
+configuration name. The module starts the service, creates the
+`nix-cache-discovery` system user, and points the host's Nix client at
+`http://127.0.0.1:5000`.
 
-The module then:
-
-- adds `http://127.0.0.1:5000` as the substituter and trusted substituter,
-  replacing the upstream substituters while `exclusive` is enabled,
-- opens the port in the firewall only to `allowedClients` when `openFirewall`
-  is enabled (the default),
-- runs the daemon as a static system user that talks to the Nix daemon over its
-  socket.
-
-`allowedClients` is empty by default, which means `discovery.ranges`. Loopback is
-always accepted and does not need to be listed. Keep `listenAddress = "0.0.0.0"`
-so the loopback substituter URL keeps working; binding to a single LAN address
-makes `127.0.0.1` unreachable.
-
-### Signing and trust
-
-No key has to be generated or distributed by default. The module sets
-`require-sigs = false` and makes the local daemon the only substituter of the
-host, so Nix trusts its local daemon over loopback. The daemon is then the trust
-boundary:
-
-- narinfos from `fallbackSubstituters` are verified against the host's
-  `trusted-public-keys` before they are proxied;
-- paths from LAN peers are trusted because only `allowedClients` can reach the
-  daemon;
-- paths already in the local store are trusted as usual.
-
-The tradeoff is that Nix itself no longer checks signatures for substituters
-configured outside this module. That is why `exclusive = true` is the default:
-Nix never talks to an upstream cache directly. Set `exclusive = false` only if
-you accept that tradeoff or configure a signing key.
-
-If you already manage a binary cache key, set `signingKeyFile` and `publicKey`.
-Narinfos are then signed with that key, `require-sigs` stays enabled, and the
-public key is added to `trusted-public-keys`.
-
-```nix
-services.nix-cache-discovery = {
-  enable = true;
-  discovery.ranges = [ "192.168.1.0/24" ];
-  signingKeyFile = "/run/secrets/household-cache-key";
-  publicKey = "household-cache-1:AAAA...";
-};
-```
-
-Generate a pair for manual mode with
-`nix key generate-secret --key-name household-cache-1` and
-`nix key convert-secret-to-public`. The key file must be readable by the
-`nix-cache-discovery` system user.
-
-### Roaming laptops
-
-A host that leaves the household network must not keep serving its store or
-scanning whatever network it joins. List the public IP addresses of the trusted
-networks:
-
-```nix
-services.nix-cache-discovery = {
-  enable = true;
-  port = 5000;
-  discovery.ranges = [ "192.168.1.0/24" ];
-  trustedNetworks = [ "203.0.113.7" ];
-};
-```
-
-Every `trustCheckInterval` seconds the daemon asks `publicIpUrl` for the current
-network's public address. When that address is not in `trustedNetworks` it stops
-discovery, forgets all peers and answers every non-loopback request with 403.
-Loopback keeps working, so the local Nix client can still use the local store.
-A failed lookup keeps the previous state, and the initial state is untrusted, so
-a host that boots on an unknown network does not serve non-loopback clients until
-it sees a trusted address. The default lookup endpoint is a third-party service;
-point `publicIpUrl` at an endpoint you control if that request should not leave
-your infrastructure.
-
-### Automatic LAN detection
-
-`discovery.auto = true` makes the daemon use the subnet of the interface that
-carries the default route instead of fixed ranges. The same subnet is used for
-the runtime allowlist, and the firewall opens the port only to private,
-link-local and unique-local addresses. Fixed ranges are ignored while this is
-enabled. The subnet is resolved at startup, so restart the service after the
-network is connected, for example after joining Wi-Fi in the installer. The
-ojuny template enables this mode by default.
-
-### Upstream caches and substituter order
-
-By default `exclusive = true`, so Nix only talks to this daemon. Set
-`exclusive = false` if Nix should also contact upstream caches directly. The
-daemon itself still prefers the local store, then LAN peers, then
-`fallbackSubstituters`:
-
-```nix
-services.nix-cache-discovery = {
-  enable = true;
-  port = 5000;
-  discovery.ranges = [ "192.168.1.0/24" ];
-  exclusive = true;
-  fallbackSubstituters = [ "https://cache.nixos.org" ];
-};
-```
-
-Fallback NARs (including compressed `.nar.xz`, `.nar.zst` and `.nar.bz2` files)
-are streamed through the daemon, so with `exclusive` enabled the upstream caches
-are only contacted by the daemon. Narinfos are re-signed when a signing key is
-configured.
-
-## Options
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `enable` | `false` | Enable the service. |
-| `package` | built from this repository | Daemon package. |
-| `port` | `5000` | Serving and discovery port. Must match on every host. |
-| `listenAddress` | `"0.0.0.0"` | Bind address. |
-| `allowedClients` | empty uses `discovery.ranges` | Prefixes allowed to connect; everything else gets 403, and only loopback is served outside `trustedNetworks`. |
-| `priority` | `30` | Value advertised in `nix-cache-info`. |
-| `discovery.ranges` | required unless auto | Prefixes scanned for peers. Local subnets are scanned first. Max 65536 addresses. |
-| `discovery.auto` | `false` | Use the connected subnet instead of fixed ranges. |
-| `discovery.interval` | `60` | Seconds between scans. |
-| `discovery.timeout` | `500` | Milliseconds per probe. |
-| `discovery.workers` | `256` | Concurrent probes. |
-| `fallbackSubstituters` | `[ "https://cache.nixos.org" ]` | Upstream caches checked after the local store and peers. |
-| `verifyFallbackSignatures` | `true` | Verify fallback narinfos against `trusted-public-keys`. |
-| `exclusive` | `true` | Make this daemon the only substituter of the host. |
-| `trustedNetworks` | `[]` | Public IPs of networks where serving and discovery are allowed. |
-| `publicIpUrl` | `https://api.ipify.org` | Lookup used to determine the current public IP. |
-| `trustCheckInterval` | `60` | Seconds between public IP checks. |
-| `signingKeyFile` | `null` | Optional signing key. |
-| `publicKey` | `null` | Public half for an optional signing key. |
-| `tls.enable` | `false` | Serve HTTPS and use HTTPS for discovery. |
-| `tls.certFile`, `tls.keyFile` | `null` | Certificate and key. |
-| `openFirewall` | `true` | Open the port to `allowedClients` only. |
-| `extraArgs` | `[]` | Extra command line arguments. |
-
-## Security model
-
-- Inbound requests from any address that is not loopback and not inside
-  `allowedClients` are rejected with 403 before routing. When the host is outside
-  `trustedNetworks`, every non-loopback request is rejected regardless of
-  `allowedClients`.
-- Discovery only sends probes to addresses inside `discovery.ranges`, and the
-  module refuses a range that is not contained in `allowedClients`.
-- Peers are only registered when they answer the discovery endpoint with a
-  compatible protocol version and an instance ID different from the local one.
-- Outbound proxy requests go only to registered peers and explicitly configured
-  fallback substituters. Request paths are validated before forwarding.
-- Fallback narinfos are verified against `trusted-public-keys` before they are
-  served by default.
-- Narinfos are signed when a signing key is configured. Without one, the module
-  sets `require-sigs = false` and keeps Nix pointed only at the local daemon;
-  Nix still verifies the NAR hash of every path it downloads.
-- The cache has no user authentication. While the host is on a trusted network,
-  any host inside `allowedClients` can read every path in the local store that
-  the daemon can see. Treat the configured ranges as the trust boundary.
-
-TLS is optional. Peer probes accept self-signed certificates, but the host's own
-Nix client must trust the certificate used by the loopback substituter URL. On a
-trusted LAN, plain HTTP with a narrow `allowedClients` range is the simpler
-setup.
-
-## Development
+Verify the service and its cache information:
 
 ```console
-$ nix develop
-$ go test ./...
-$ nix build
-$ nix build .#checks.x86_64-linux.vm
+$ systemctl is-active nix-cache-discovery
+active
+$ curl -s http://127.0.0.1:5000/nix-cache-info
+StoreDir: /nix/store
+WantMassQuery: 1
+Priority: 30
 ```
 
-The VM test starts two household nodes and one outsider. The client substitutes
-`hello` through its own daemon from the server's store, and the outsider receives
-403.
+To build only the daemon, run `nix build` and inspect
+`result/bin/nix-cache-discovery`.
 
-`internal/store/nix.cpp` and `nix.h` are adapted from nix-serve-ng; see `NOTICE`.
+## Usage
+
+With the defaults, `exclusive = true` makes this daemon the host's only
+substituter. Nix never contacts an upstream cache directly and
+`require-sigs = false` applies, so the daemon is the trust boundary. It checks
+the local store first, then registered peers, then `fallbackSubstituters`.
+Narinfos from fallback caches are verified against `trusted-public-keys` before
+they are proxied.
+
+Set `signingKeyFile` and `publicKey` to sign narinfos instead. For a laptop that
+leaves the network, list the public addresses of trusted networks in
+`trustedNetworks`; outside them the daemon stops discovery and rejects every
+non-loopback request with 403.
+
+## Limits
+
+The cache has no user authentication. Any host inside `allowedClients` can read
+every path in the local store that the daemon can see. Discovery ranges are
+capped at 65536 addresses. TLS is optional, and peer probes accept self-signed
+certificates. The default public IP lookup uses a third-party service. Running
+with `exclusive = false` removes the signature guarantee the module otherwise
+provides, unless a signing key is configured. Windows and macOS are not
+supported.
+
+## Documentation
+
+- [nix/module.nix](nix/module.nix) defines every service option and its default.
+- [nix/package.nix](nix/package.nix) shows how the daemon is built.
+- [tests/two-node.nix](tests/two-node.nix) shows the two-node substitution test.
+- [NOTICE](NOTICE) records the nix-serve-ng code and its license.
+
+## Contributing
+
+Open issues at <https://github.com/ojuny-project/nix-cache-discovery/issues>. A patch
+must run `go test ./...` and `nix build` from `nix develop`, and must keep the
+`NOTICE` credit when it changes the adapted C++ files.
 
 ## License
 
-GPL-3.0-only. See `LICENSE`.
+GPL-3.0-only. See [LICENSE](LICENSE). The files
+`internal/store/nix.cpp` and `internal/store/nix.h` remain under the BSD
+3-clause terms in [NOTICE](NOTICE).
