@@ -1,31 +1,22 @@
 # nix-cache-discovery
 
-nix-cache-discovery is a Nix binary cache for a local network. Every host runs
-the same Go daemon on the same port; each daemon serves its own Nix store,
-discovers the other daemons on configured prefixes, and proxies paths it does
-not have locally. It links `libstore` and `libutil` through a C++ shim adapted
-from nix-serve-ng. The package targets Linux and the flake builds
-`x86_64-linux` and `aarch64-linux`.
+nix-cache-discovery is a Nix binary cache proxy with automated local network sharing. Every host discovers other hosts running nix-cache-discovery on the same host; each daemon serves its own Nix store, discovers the other daemons on configured prefixes, and proxies paths it does not have locally. It links `libstore` and `libutil` through a C++ shim adapted from nix-serve-ng. 
+
+nix-cache-discovery is explicitly limited to local addresses only, and has a public-ip filter to prevent cache sharing on unsafe networks (in which case, nix-cache-discovery will still run, but will only use the fallback substituters)
+
+nix-cache-discovery verifies the signatures and hashes of the upstream cache to prevent MITM attacks, just like nix does by itself. 
 
 ## Status
 
-Untested. The package metadata and flake report version 0.1.0. A two-node
-virtual machine check exists in `tests/two-node.nix`, but no run is recorded for
-this page.
+Tested functional.
 
 ## Requirements
 
 - NixOS with flakes enabled and a running `nix-daemon`.
-- One TCP port reachable between hosts; the default is 5000 and every peer must
-  use the same value.
-- `discovery.ranges` containing the addresses to scan, or `discovery.auto` for
-  the subnet of the interface that carries the default route.
-- Network access to `fallbackSubstituters` unless the local store and peers
-  already hold every path.
-- Go, a C++ compiler, and the Nix development headers when building from the
-  devshell.
+- One TCP port reachable between hosts (default port 5000); all peers must use the same port to discover eachother and multiple independent sharing meshes can be set up on one network using multiple ports.
+- `discovery.ranges` containing the addresses to scan, or `discovery.auto` to automatically configure the range to the local subnet on-connect. 
+- Network access to `fallbackSubstituters` unless the local store and peers already hold every path.
 
-Memory and disk requirements are not stated.
 
 ## Install
 
@@ -52,10 +43,8 @@ Add the flake input and enable the module on each host:
 }
 ```
 
-Rebuild with `sudo nixos-rebuild switch --flake .#<host>`, where `<host>` is the
-configuration name. The module starts the service, creates the
-`nix-cache-discovery` system user, and points the host's Nix client at
-`http://127.0.0.1:5000`.
+Rebuild the system afterwards, The module starts the service, creates the
+`nix-cache-discovery` system user, and points the host's Nix client at the local nix-cache-discovery cache. 
 
 Verify the service and its cache information:
 
@@ -73,34 +62,42 @@ To build only the daemon, run `nix build` and inspect
 
 ## Usage
 
-With the defaults, `exclusive = true` makes this daemon the host's only
-substituter. Nix never contacts an upstream cache directly and
-`require-sigs = false` applies, so the daemon is the trust boundary. It checks
-the local store first, then registered peers, then `fallbackSubstituters`.
-Narinfos from fallback caches are verified against `trusted-public-keys` before
-they are proxied.
+By default, nix-cache-discovery is set up to make itself the *only* substituter cache on your system. this allows it to ensure local caches are always prioritized over public caches, and gives it more control over how to handle timeouts in the upstream substituter caches. It will always check the local store first, then local peers, then the fallback cache. 
 
-Set `signingKeyFile` and `publicKey` to sign narinfos instead. For a laptop that
-leaves the network, list the public addresses of trusted networks in
-`trustedNetworks`; outside them the daemon stops discovery and rejects every
-non-loopback request with 403.
+the daemon will disable nix's internal signature enforcement by default, allowing the daemon to handle trust. signature enforcement can be re-enabled with require-sigs = true; which will then require each peer to sign its cache with a trusted key. this needs explicit setup per peer, but is significantly more secure and recommended for professional or business use (alongside using an internal nix-cache-ng server as your primary fallback substituter)
+
+the trustedNetworks key allows you to set specific public IPs on which nix-cache-discovery will activate its discovery functionality, if your device is on a different network with this configuration option set, it will not contact any other device on the network or run scans. 
+
 
 ## Limits
 
 The cache has no user authentication. Any host inside `allowedClients` can read
 every path in the local store that the daemon can see. Discovery ranges are
-capped at 65536 addresses. TLS is optional, and peer probes accept self-signed
-certificates. The default public IP lookup uses a third-party service. Running
-with `exclusive = false` removes the signature guarantee the module otherwise
-provides, unless a signing key is configured. Windows and macOS are not
-supported.
+capped at 65536 addresses. TLS is not included in nix-cache-discovery, and peer probes accept self-signed
+certificates. The default public IP lookup uses a third-party service (which to use is configurable in the options). Running
+with `exclusive = false` and require-sigs = false can result in insecure cache access to regular substituters (not configured in nix-cache-discovery's settings) as they can be accessed and their signatures are not checked, please use require-sigs = true if you want to use exclusive = false outside of temporary troubleshooting. Windows and macOS are not supported.
+
+## Releases
+
+A `v*` tag, a manual workflow run, or a commit on `main` whose title starts with
+a version such as `v0.1.0` builds `nix-cache-discovery.bin` and `nix-cache-discovery-flake.tar.gz`.
+
+The release flake installs the prebuilt bundle without compiling:
+
+```nix
+inputs.nix-cache-discovery.url =
+  "tarball+https://github.com/ojuny-project/nix-cache-discovery/releases/download/vX.Y.Z/nix-cache-discovery-flake.tar.gz";
+```
+
+Then add `inputs.nix-cache-discovery.packages.${pkgs.system}.nix-cache-discovery` to `environment.systemPackages`.
+
+The generated flake exposes packages only. Use the source flake when you need
+the NixOS module.
+
 
 ## Documentation
-
-- [nix/module.nix](nix/module.nix) defines every service option and its default.
-- [nix/package.nix](nix/package.nix) shows how the daemon is built.
-- [tests/two-node.nix](tests/two-node.nix) shows the two-node substitution test.
-- [NOTICE](NOTICE) records the nix-serve-ng code and its license.
+- [OPTIONS.md](OPTIONS.md) - generated options reference.
+- [NOTICE](NOTICE) - records the nix-serve-ng code and its license.
 
 ## Contributing
 
