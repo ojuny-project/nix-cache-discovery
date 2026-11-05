@@ -1,0 +1,18 @@
+{
+  "repo": "ojuny-project/nix-cache-discovery",
+  "system": "x86_64-linux",
+  "latest": "v0.1.0-hotfix-1",
+  "releases": {
+    "v0.1.0-hotfix-1": {
+      "tag": "v0.1.0-hotfix-1",
+      "version": "0.1.0-hotfix-1",
+      "packages": {
+        "nix-cache-discovery": {
+          "file": "nix-cache-discovery.bin",
+          "url": "https://github.com/ojuny-project/nix-cache-discovery/releases/download/v0.1.0-hotfix-1/nix-cache-discovery.bin",
+          "hash": "sha256-MvcLOsRRhdmwocV7WtNiJxEkcsUVm4HI/Pj+bUr8xLM="
+        }
+      }
+    }
+  }
+}
