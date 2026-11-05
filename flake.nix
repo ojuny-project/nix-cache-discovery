@@ -14,22 +14,34 @@
       forEachSystem = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
       binaryInfo =
-        if builtins.pathExists ./binary-url.json
-        then builtins.fromJSON (builtins.readFile ./binary-url.json)
-        else null;
+        if builtins.pathExists ./binary-url.json then
+          builtins.fromJSON (builtins.readFile ./binary-url.json)
+        else
+          null;
 
-      mkBinary = {
-        system,
-        tag ? (if binaryInfo == null then throw "nix-cache-discovery: binary-url.json is missing" else binaryInfo.latest),
-        package ? "nix-cache-discovery",
-      }: let
-        release =
-          if binaryInfo == null
-          then throw "nix-cache-discovery: binary-url.json is missing"
-          else binaryInfo.releases.${tag} or (throw "nix-cache-discovery: release '${tag}' is not recorded in binary-url.json");
-        packageInfo = release.packages.${package} or (throw "nix-cache-discovery: package '${package}' is not recorded in release '${tag}'");
-        pkgs = import nixpkgs {inherit system;};
-      in
+      mkBinary =
+        {
+          system,
+          tag ? (
+            if binaryInfo == null then
+              throw "nix-cache-discovery: binary-url.json is missing"
+            else
+              binaryInfo.latest
+          ),
+          package ? "nix-cache-discovery",
+        }:
+        let
+          release =
+            if binaryInfo == null then
+              throw "nix-cache-discovery: binary-url.json is missing"
+            else
+              binaryInfo.releases.${tag}
+                or (throw "nix-cache-discovery: release '${tag}' is not recorded in binary-url.json");
+          packageInfo =
+            release.packages.${package}
+              or (throw "nix-cache-discovery: package '${package}' is not recorded in release '${tag}'");
+          pkgs = import nixpkgs { inherit system; };
+        in
         pkgs.callPackage ./nix/binary.nix {
           name = package;
           inherit (packageInfo) file;
@@ -47,9 +59,12 @@
           default = pkgs.callPackage ./nix/package.nix { };
           nix-cache-discovery = default;
         }
-        // nixpkgs.lib.optionalAttrs (binaryInfo != null && binaryInfo.system == pkgs.stdenv.hostPlatform.system) {
-          nix-cache-discovery-binary = mkBinary {system = pkgs.stdenv.hostPlatform.system;};
-        }
+        //
+          nixpkgs.lib.optionalAttrs
+            (binaryInfo != null && binaryInfo.system == pkgs.stdenv.hostPlatform.system)
+            {
+              nix-cache-discovery-binary = mkBinary { system = pkgs.stdenv.hostPlatform.system; };
+            }
       );
 
       devShells = forEachSystem (pkgs: {
