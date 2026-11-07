@@ -68,6 +68,21 @@
             }
       );
 
+      apps = forEachSystem (pkgs: {
+        ci = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "ci";
+              runtimeInputs = [ pkgs.nix ];
+              text = ''
+                exec nix flake check "$@"
+              '';
+            }
+          }/bin/ci";
+        };
+      });
+
       devShells = forEachSystem (pkgs: {
         default = pkgs.callPackage ./nix/devshell.nix { };
       });
@@ -80,5 +95,7 @@
         package = self.packages.${pkgs.system}.default;
         vm = import ./tests/two-node.nix { inherit pkgs; };
       });
+
+      hydraJobs = self.checks;
     };
 }
