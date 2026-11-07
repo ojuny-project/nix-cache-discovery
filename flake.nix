@@ -94,6 +94,11 @@
       checks = forEachSystem (pkgs: {
         package = self.packages.${pkgs.system}.default;
         vm = import ./tests/two-node.nix { inherit pkgs; };
+        default = pkgs.runCommand "check-default" { } ''
+          echo ${self.checks.${pkgs.system}.package} >/dev/null
+          echo ${self.checks.${pkgs.system}.vm} >/dev/null
+          touch $out
+        '';
       });
 
       hydraJobs = self.checks;

@@ -48,6 +48,8 @@ func (server *Server) route(w http.ResponseWriter, r *http.Request) {
 		server.handleCacheInfo(w)
 	case path == discovery.InfoPath:
 		server.handleDiscoveryInfo(w)
+	case path == sourcesPath:
+		server.handleSources(w, r)
 	case strings.HasSuffix(path, ".narinfo"):
 		server.handleNarinfo(w, r)
 	case strings.HasPrefix(path, "/nar/"):
@@ -67,6 +69,7 @@ func (server *Server) handleCacheInfo(w http.ResponseWriter) {
 func (server *Server) handleDiscoveryInfo(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain")
 	fmt.Fprintf(w, "id=%s\nversion=%s\nport=%d\n", server.options.InstanceID, discovery.Version, server.options.Port)
+	fmt.Fprintf(w, "hostname=%s\n", server.hostname())
 }
 
 func (server *Server) handleNarinfo(w http.ResponseWriter, r *http.Request) {

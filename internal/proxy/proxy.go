@@ -44,9 +44,10 @@ type Proxier struct {
 	client       *http.Client
 	streamClient *http.Client
 
-	mu     sync.Mutex
-	cache  map[string]cacheEntry
-	misses map[string]time.Time
+	mu      sync.Mutex
+	cache   map[string]cacheEntry
+	misses  map[string]time.Time
+	sources map[string]sourceEntry
 }
 
 type cacheEntry struct {
@@ -147,6 +148,7 @@ func (proxier *Proxier) narinfoOnce(ctx context.Context, hashPart string, hops i
 		}
 
 		proxier.remember(hashPart, body)
+		proxier.recordSource(hashPart, peerSource(peer))
 		return body, true, nil
 	}
 
@@ -189,6 +191,7 @@ func (proxier *Proxier) narinfoOnce(ctx context.Context, hashPart string, hops i
 		}
 
 		proxier.remember(hashPart, body)
+		proxier.recordSource(hashPart, fallbackSource(fallback))
 		return body, true, nil
 	}
 

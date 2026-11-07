@@ -13,6 +13,7 @@ type Peer struct {
 	ID       string
 	URL      string
 	Addr     netip.Addr
+	Hostname string
 	LastSeen time.Time
 	Misses   int
 }

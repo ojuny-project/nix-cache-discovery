@@ -245,6 +245,7 @@ func (prober *Prober) probeOnce(ctx context.Context, address netip.Addr) (*regis
 		ID:       id,
 		URL:      base,
 		Addr:     address,
+		Hostname: fields["hostname"],
 		LastSeen: time.Now(),
 	}, nil
 }
