@@ -110,3 +110,4 @@ must run `go test ./...` and `nix build` from `nix develop`, and must keep the
 GPL-3.0-only. See [LICENSE](LICENSE). The files
 `internal/store/nix.cpp` and `internal/store/nix.h` remain under the BSD
 3-clause terms in [NOTICE](NOTICE).
+
